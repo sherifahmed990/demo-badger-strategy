@@ -1,8 +1,7 @@
 from config import (
     BADGER_DEV_MULTISIG,
-    WANT,
-    LP_COMPONENT,
-    REWARD_TOKEN,
+    TOKEN0,
+    TOKEN1,
     DEFAULT_GOV_PERFORMANCE_FEE,
     DEFAULT_PERFORMANCE_FEE,
     DEFAULT_WITHDRAWAL_FEE,
@@ -18,9 +17,8 @@ def test_deploy_settings(deployed):
     protected_tokens = strategy.getProtectedTokens()
 
     ## NOTE: Change based on how you set your contract
-    assert protected_tokens[0] == WANT
-    assert protected_tokens[1] == LP_COMPONENT
-    assert protected_tokens[2] == REWARD_TOKEN
+    assert protected_tokens[0] == TOKEN0
+    assert protected_tokens[1] == TOKEN1
 
     assert strategy.governance() == BADGER_DEV_MULTISIG
 

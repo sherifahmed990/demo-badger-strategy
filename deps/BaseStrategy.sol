@@ -35,7 +35,10 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
     // Standardized harvest event for UI
     event Harvest(uint256 harvested, uint256 indexed blockNumber);
 
-    address public want; // Want: Curve.fi renBTC/wBTC (crvRenWBTC) LP token
+    //address public want; // Want: Curve.fi renBTC/wBTC (crvRenWBTC) LP token
+
+    address public wtoken0;
+    address public wtoken1;
 
     uint256 public performanceFeeGovernance;
     uint256 public performanceFeeStrategist;
@@ -47,6 +50,7 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
 
     address public controller;
     address public guardian;
+    address public vault;
 
     uint256 public withdrawalMaxDeviationThreshold;
 
@@ -55,7 +59,8 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
         address _strategist,
         address _controller,
         address _keeper,
-        address _guardian
+        address _guardian,
+        address _vault
     ) public initializer whenNotPaused {
         __Pausable_init();
         governance = _governance;
@@ -64,6 +69,7 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
         controller = _controller;
         guardian = _guardian;
         withdrawalMaxDeviationThreshold = 50;
+        _vault = vault;
     }
 
     // ===== Modifiers =====
@@ -94,13 +100,16 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
     }
 
     /// @notice Get the balance of want held idle in the Strategy
-    function balanceOfWant() public view returns (uint256) {
-        return IERC20Upgradeable(want).balanceOf(address(this));
+    function balanceOfTokens() public view returns (uint256,uint256) {
+        return (IERC20Upgradeable(wtoken0).balanceOf(address(this)),
+                IERC20Upgradeable(wtoken1).balanceOf(address(this)));
     }
 
     /// @notice Get the total balance of want realized in the strategy, whether idle or active in Strategy positions.
-    function balanceOf() public view virtual returns (uint256) {
-        return balanceOfWant().add(balanceOfPool());
+    function balanceOf() public view virtual returns (uint256,uint256) {
+        (uint256 v1, uint256 v2) = balanceOfTokens();
+        (uint256 p1, uint256 p2) = balanceOfPool();
+        return (v1.add(p1),v2.add(p2));
     }
 
     function isTendable() public view virtual returns (bool) {
@@ -158,12 +167,13 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
         );
         withdrawalMaxDeviationThreshold = _threshold;
     }
-
+    
     function deposit() public virtual whenNotPaused {
         _onlyAuthorizedActorsOrController();
-        uint256 _want = IERC20Upgradeable(want).balanceOf(address(this));
-        if (_want > 0) {
-            _deposit(_want);
+        uint256 _wtoken0 = IERC20Upgradeable(wtoken0).balanceOf(address(this));
+        uint256 _wtoken1 = IERC20Upgradeable(wtoken1).balanceOf(address(this));
+        if (_wtoken0 > 0 || _wtoken1 > 0) {
+            _deposit(_wtoken0,_wtoken1,0,type(uint128).max,address(this));
         }
         _postDeposit();
     }
@@ -181,7 +191,8 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
 
         _withdrawAll();
 
-        _transferToVault(IERC20Upgradeable(want).balanceOf(address(this)));
+        _transferToVault(IERC20Upgradeable(wtoken0).balanceOf(address(this)), 
+                        IERC20Upgradeable(wtoken1).balanceOf(address(this)));
     }
 
     /// @notice Withdraw partial funds from the strategy, unrolling from strategy positions as necessary
@@ -191,14 +202,16 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
         _onlyController();
 
         // Withdraw from strategy positions, typically taking from any idle want first.
-        _withdrawSome(_amount);
-        uint256 _postWithdraw =
-            IERC20Upgradeable(want).balanceOf(address(this));
+        _withdrawSome(_amount,0,0,address(this));
+        uint256 _postWithdraw0 =
+            IERC20Upgradeable(wtoken0).balanceOf(address(this));
+        uint256 _postWithdraw1 =
+            IERC20Upgradeable(wtoken1).balanceOf(address(this));
 
         // Sanity check: Ensure we were able to retrieve sufficent want from strategy positions
         // If we end up with less than the amount requested, make sure it does not deviate beyond a maximum threshold
-        if (_postWithdraw < _amount) {
-            uint256 diff = _diff(_amount, _postWithdraw);
+        /*if (_postWithdraw0 < _amount) {
+            uint256 diff = _diff(_amount, _postWithdraw0);
 
             // Require that difference between expected and actual values is less than the deviation threshold percentage
             require(
@@ -206,16 +219,16 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
                     _amount.mul(withdrawalMaxDeviationThreshold).div(MAX_FEE),
                 "base-strategy/withdraw-exceed-max-deviation-threshold"
             );
-        }
+        }*/
 
         // Return the amount actually withdrawn if less than amount requested
-        uint256 _toWithdraw = MathUpgradeable.min(_postWithdraw, _amount);
+        //uint256 _toWithdraw = MathUpgradeable.min(_postWithdraw0, _amount);
 
         // Process withdrawal fee
-        uint256 _fee = _processWithdrawalFee(_toWithdraw);
+        (uint256 _fee0, uint256 _fee1) = _processWithdrawalFee(_postWithdraw0,_postWithdraw1);
 
         // Transfer remaining to Vault to handle withdrawal
-        _transferToVault(_toWithdraw.sub(_fee));
+        _transferToVault(_postWithdraw0.sub(_fee0), _postWithdraw0.sub(_fee1));
     }
 
     // NOTE: must exclude any tokens used in the yield
@@ -249,17 +262,22 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
 
     /// @notice If withdrawal fee is active, take the appropriate amount from the given value and transfer to rewards recipient
     /// @return The withdrawal fee that was taken
-    function _processWithdrawalFee(uint256 _amount) internal returns (uint256) {
+    function _processWithdrawalFee(uint256 _amount0,uint256 _amount1) internal returns (uint256,uint256) {
         if (withdrawalFee == 0) {
-            return 0;
+            return (0,0);
         }
 
-        uint256 fee = _amount.mul(withdrawalFee).div(MAX_FEE);
-        IERC20Upgradeable(want).safeTransfer(
+        uint256 fee0 = _amount0.mul(withdrawalFee).div(MAX_FEE);
+        uint256 fee1 = _amount1.mul(withdrawalFee).div(MAX_FEE);
+        IERC20Upgradeable(wtoken0).safeTransfer(
             IController(controller).rewards(),
-            fee
+            fee0
         );
-        return fee;
+        IERC20Upgradeable(wtoken1).safeTransfer(
+            IController(controller).rewards(),
+            fee1
+        );
+        return (fee0, fee1);
     }
 
     /// @dev Helper function to process an arbitrary fee
@@ -289,10 +307,11 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
         IERC20Upgradeable(token).safeApprove(recipient, amount);
     }
 
-    function _transferToVault(uint256 _amount) internal {
-        address _vault = IController(controller).vaults(address(want));
+    function _transferToVault(uint256 _amount0, uint256 _amount1) internal {//mod
+        address _vault = vault;
         require(_vault != address(0), "!vault"); // additional protection so we don't burn the funds
-        IERC20Upgradeable(want).safeTransfer(_vault, _amount);
+        IERC20Upgradeable(wtoken0).safeTransfer(address(this), _amount0);
+        IERC20Upgradeable(wtoken1).safeTransfer(address(this), _amount1);
     }
 
     /// @notice Swap specified balance of given token on Uniswap with given path
@@ -336,23 +355,23 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
     }
 
     /// @notice Add liquidity to uniswap for specified token pair, utilizing the maximum balance possible
-    function _add_max_liquidity_uniswap(address token0, address token1)
+    function _add_max_liquidity_uniswap(address _wtoken0, address _wtoken1)
         internal
         virtual
-    {
-        uint256 _token0Balance =
-            IERC20Upgradeable(token0).balanceOf(address(this));
-        uint256 _token1Balance =
-            IERC20Upgradeable(token1).balanceOf(address(this));
+    {//mod
+        uint256 _wtoken0Balance =
+            IERC20Upgradeable(_wtoken0).balanceOf(address(this));
+        uint256 _wtoken1Balance =
+            IERC20Upgradeable(_wtoken1).balanceOf(address(this));
 
-        _safeApproveHelper(token0, uniswap, _token0Balance);
-        _safeApproveHelper(token1, uniswap, _token1Balance);
+        _safeApproveHelper(_wtoken0, uniswap, _wtoken0Balance);
+        _safeApproveHelper(_wtoken1, uniswap, _wtoken1Balance);
 
         IUniswapRouterV2(uniswap).addLiquidity(
-            token0,
-            token1,
-            _token0Balance,
-            _token1Balance,
+            _wtoken0,
+            _wtoken1,
+            _wtoken0Balance,
+            _wtoken1Balance,
             0,
             0,
             address(this),
@@ -369,7 +388,15 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
     // ===== Abstract Functions: To be implemented by specific Strategies =====
 
     /// @dev Internal deposit logic to be implemented by Stratgies
-    function _deposit(uint256 _amount) internal virtual;
+    function _deposit(uint256 amount0Desired,
+        uint256 amount1Desired,
+        uint256 amount0Min,
+        uint256 amount1Min,
+        address to) internal virtual returns (
+            uint256 shares,
+            uint256 amount0,
+            uint256 amount1
+        );
 
     function _postDeposit() internal virtual {
         //no-op by default
@@ -389,7 +416,10 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
 
     /// @dev Internal logic for partial withdrawals. Should exit positions as efficiently as possible.
     /// @dev The withdraw() function shell automatically uses idle want in the strategy before attempting to withdraw more using this
-    function _withdrawSome(uint256 _amount) internal virtual returns (uint256);
+    function _withdrawSome(uint256 shares,
+        uint256 amount0Min,
+        uint256 amount1Min,
+        address to) internal virtual returns (uint256 amount0, uint256 amount1);
 
     /// @dev Realize returns from positions
     /// @dev Returns can be reinvested into positions, or distributed in another fashion
@@ -401,7 +431,7 @@ abstract contract BaseStrategy is PausableUpgradeable, SettAccessControl {
     function getName() external pure virtual returns (string memory);
 
     /// @dev Balance of want currently held in strategy positions
-    function balanceOfPool() public view virtual returns (uint256);
+    function balanceOfPool() public view virtual returns (uint256,uint256);
 
     uint256[49] private __gap;
 }

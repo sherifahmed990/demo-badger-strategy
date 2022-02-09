@@ -181,10 +181,12 @@ contract Controller is SettAccessControl {
     /// @param _amount Amount of token to deposit
     function earn(address _token, uint256 _amount) public {
         address _strategy = strategies[_token];
+        IERC20Upgradeable(_token).safeTransfer(_strategy, _amount);
+        /*address _strategy = strategies[_token];
         address _want = IStrategy(_strategy).want();
 
         _onlyApprovedForWant(_want);
-
+        
         if (_want != _token) {
             address converter = converters[_token][_want];
             IERC20Upgradeable(_token).safeTransfer(converter, _amount);
@@ -193,7 +195,7 @@ contract Controller is SettAccessControl {
         } else {
             IERC20Upgradeable(_token).safeTransfer(_strategy, _amount);
         }
-        IStrategy(_strategy).deposit();
+        IStrategy(_strategy).deposit();*/
     }
 
     // ===== Permissioned Actions: Only Associated Vault =====

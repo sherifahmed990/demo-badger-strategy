@@ -7,11 +7,12 @@ from brownie import (
 )
 from config import (
     BADGER_DEV_MULTISIG,
-    WANT,
-    LP_COMPONENT,
-    REWARD_TOKEN,
-    PROTECTED_TOKENS,
+    POOL,
+    TOKEN0,
+    TOKEN1,
     FEES,
+    PROTOCOL_FEE,
+    MAX_TOTAL_SUPPLY
 )
 from dotmap import DotMap
 import pytest
@@ -35,7 +36,6 @@ def deployed():
 
     sett = SettV4.deploy({"from": deployer})
     sett.initialize(
-        WANT,
         controller,
         BADGER_DEV_MULTISIG,
         keeper,
@@ -43,10 +43,13 @@ def deployed():
         False,
         "prefix",
         "PREFIX",
+        POOL,
+        PROTOCOL_FEE,
+        MAX_TOTAL_SUPPLY
     )
 
     sett.unpause({"from": governance})
-    controller.setVault(WANT, sett)
+    controller.setVault((TOKEN0), sett)
 
     ## TODO: Add guest list once we find compatible, tested, contract
     # guestList = VipCappedGuestListWrapperUpgradeable.deploy({"from": deployer})
@@ -62,28 +65,37 @@ def deployed():
         strategist,
         controller,
         keeper,
-        guardian,
-        PROTECTED_TOKENS,
-        FEES,
+        guardian,        
+        sett.address,
+        FEES
     )
 
     ## Tool that verifies bytecode (run independently) <- Webapp for anyone to verify
 
     ## Set up tokens
-    want = interface.IERC20(WANT)
-    lpComponent = interface.IERC20(LP_COMPONENT)
-    rewardToken = interface.IERC20(REWARD_TOKEN)
+    token0 = interface.IERC20(TOKEN0)
+    token1 = interface.IERC20(TOKEN1)
 
     ## Wire up Controller to Strart
     ## In testing will pass, but on live it will fail
-    controller.approveStrategy(WANT, strategy, {"from": governance})
-    controller.setStrategy(WANT, strategy, {"from": deployer})
+    controller.approveStrategy(TOKEN0, strategy, {"from": governance})
+    controller.approveStrategy(TOKEN1, strategy, {"from": governance})
+    controller.setStrategy(TOKEN0, strategy, {"from": deployer})
+    controller.setStrategy(TOKEN1, strategy, {"from": deployer})
 
     ## Uniswap some tokens here
     router = interface.IUniswapRouterV2("0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D")
     router.swapExactETHForTokens(
         0,  ## Mint out
-        ["0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", WANT],
+        ["0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", TOKEN0],
+        deployer,
+        9999999999999999,
+        {"from": deployer, "value": 5000000000000000000},
+    )
+
+    router.swapExactETHForTokens(
+        0,  ## Mint out
+        ["0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", TOKEN1],
         deployer,
         9999999999999999,
         {"from": deployer, "value": 5000000000000000000},
@@ -95,10 +107,12 @@ def deployed():
         vault=sett,
         sett=sett,
         strategy=strategy,
+        token0=token0,
+        token1=token1,
         # guestList=guestList,
-        want=want,
-        lpComponent=lpComponent,
-        rewardToken=rewardToken,
+        #want=want,
+        #lpComponent=lpComponent,
+        #rewardToken=rewardToken,
     )
 
 
@@ -129,8 +143,12 @@ def strategy(deployed):
 
 
 @pytest.fixture
-def want(deployed):
-    return deployed.want
+def token0(deployed):
+    return deployed.token0
+
+@pytest.fixture
+def token1(deployed):
+    return deployed.token1
 
 
 @pytest.fixture

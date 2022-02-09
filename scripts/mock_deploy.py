@@ -1,10 +1,7 @@
 from brownie import *
 from config import (
     BADGER_DEV_MULTISIG,
-    WANT,
-    LP_COMPONENT,
-    REWARD_TOKEN,
-    PROTECTED_TOKENS,
+    POOL,
     FEES,
 )
 from dotmap import DotMap
@@ -13,6 +10,19 @@ from dotmap import DotMap
 def main():
     return deploy()
 
+#POOL = "0x5777d92f208679db4b9778590fa3cab3ac9e2168"
+TOKEN0 = "0x6b175474e89094c44da98b954eedeac495271d0f"
+TOKEN1 = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+PROTOCOL_FEE = 5000  # 5%
+MAX_TOTAL_SUPPLY = 2e17
+
+BASE_THRESHOLD = 3600
+LIMIT_THRESHOLD = 1200
+PERIOD = 41400  # ~12 hours
+MIN_TICK_MOVE = 0
+MAX_TWAP_DEVIATION = 100  # 1%
+TWAP_DURATION = 60  # 60 seconds
+KEEPER = "0x04c82c5791bbbdfbdda3e836ccbef567fdb2ea07"
 
 def deploy():
     """
@@ -34,6 +44,7 @@ def deploy():
     controller.initialize(BADGER_DEV_MULTISIG, strategist, keeper, BADGER_DEV_MULTISIG)
 
     sett = SettV4.deploy({"from": deployer})
+    """
     sett.initialize(
         WANT,
         controller,
@@ -43,10 +54,23 @@ def deploy():
         False,
         "prefix",
         "PREFIX",
+    )"""
+
+    sett.initialize(
+        controller,
+        BADGER_DEV_MULTISIG,
+        keeper,
+        guardian,
+        False,
+        "prefix",
+        "PREFIX",
+        POOL,
+        PROTOCOL_FEE,
+        MAX_TOTAL_SUPPLY,
     )
 
     sett.unpause({"from": governance})
-    controller.setVault(WANT, sett)
+    #controller.setVault(TOKEN0, sett.address)
 
     ## TODO: Add guest list once we find compatible, tested, contract
     # guestList = VipCappedGuestListWrapperUpgradeable.deploy({"from": deployer})
@@ -62,28 +86,28 @@ def deploy():
         strategist,
         controller,
         keeper,
-        guardian,
-        PROTECTED_TOKENS,
-        FEES,
+        guardian,        
+        sett.address,
+        FEES
     )
 
     ## Tool that verifies bytecode (run independetly) <- Webapp for anyone to verify
 
     ## Set up tokens
-    want = interface.IERC20(WANT)
-    lpComponent = interface.IERC20(LP_COMPONENT)
-    rewardToken = interface.IERC20(REWARD_TOKEN)
+    token0 = interface.IERC20(TOKEN0)
+    token1 = interface.IERC20(TOKEN1)
+    #rewardToken = interface.IERC20(REWARD_TOKEN)
 
     ## Wire up Controller to Strart
     ## In testing will pass, but on live it will fail
-    controller.approveStrategy(WANT, strategy, {"from": governance})
-    controller.setStrategy(WANT, strategy, {"from": deployer})
+    controller.approveStrategy(token0, strategy, {"from": governance})
+    """controller.setStrategy(token0, strategy, {"from": deployer})
 
     ## Uniswap some tokens here
     router = Contract.from_explorer("0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D")
     router.swapExactETHForTokens(
         0,  ## Mint out
-        ["0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", WANT],
+        ["0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", TOKEN0],
         deployer,
         9999999999999999,
         {"from": deployer, "value": 5000000000000000000},
@@ -96,7 +120,8 @@ def deploy():
         sett=sett,
         strategy=strategy,
         # guestList=guestList,
-        want=want,
-        lpComponent=lpComponent,
-        rewardToken=rewardToken,
+        want=token0,
+        lpComponent=token0,
+        rewardToken=token0,
     )
+"""
